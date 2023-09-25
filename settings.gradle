@@ -1,0 +1,3 @@
+rootProject.name = "ashmem4yuv-jni"
+include ':server'
+include ':client'
