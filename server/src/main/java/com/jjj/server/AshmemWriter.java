@@ -1,10 +1,17 @@
 package com.jjj.server;
 
+import android.os.Build;
+import android.os.MemoryFile;
 import android.os.ParcelFileDescriptor;
 import android.os.RemoteException;
 import android.util.Log;
+import android.widget.Toast;
 
+import java.io.FileDescriptor;
 import java.io.IOException;
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 
 public class AshmemWriter extends IAshmem.Stub {
 
@@ -39,13 +46,38 @@ public class AshmemWriter extends IAshmem.Stub {
     }
 
     private void initAshmem() {
-        mSharedFd= createAshmem(ASHM_FILE_NAME, getSize());
-//        try {
-//            mParcelFileDescriptor=ParcelFileDescriptor.fromFd(mSharedFd);
-//        } catch (IOException e) {
-//            throw new RuntimeException(e);
-//        }
+
+        int sharedFd=-1;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            //Android version >= 8.0
+            try {
+                MemoryFile memoryFile = new MemoryFile(ASHM_FILE_NAME, getSize());
+                Class<?> memoryFileClass = Class.forName("android.os.MemoryFile");
+                Method getFileDescriptorMethod = memoryFileClass.getDeclaredMethod("getFileDescriptor");
+                getFileDescriptorMethod.setAccessible(true);
+                FileDescriptor fd = (FileDescriptor) getFileDescriptorMethod.invoke(memoryFile);
+                mParcelFileDescriptor=ParcelFileDescriptor.dup(fd);
+                mSharedFd = mParcelFileDescriptor.getFd();
+            } catch (IOException | IllegalAccessException |
+                     ClassNotFoundException | NoSuchMethodException | InvocationTargetException e) {
+                throw new RuntimeException(e);
+            }
+        } else {
+            //Android version < 8.0 没权限用jni的open方法直接对 /dev/ashmem虚拟文件进行操作
+            mSharedFd = createAshmem(ASHM_FILE_NAME, getSize());
+        }
+
+
+        if (mSharedFd <= 0) {
+            throw new RuntimeException("mSharedFd <= 0");
+        }
+
+
         mAshmemId = initAshmemByFd(mSharedFd, getSize());
+
+        if (mAshmemId <= 0) {
+            throw new RuntimeException("mAshmemId <= 0");
+        }
     }
 
 
@@ -66,8 +98,11 @@ public class AshmemWriter extends IAshmem.Stub {
     @Override
     public ParcelFileDescriptor getParcelFileDescriptor() throws RemoteException {
         try {
-            ParcelFileDescriptor p=ParcelFileDescriptor.fromFd(mSharedFd);
-            return p;
+            //防止ParcelFileDescriptor被占用，所以要生成一个副本返回
+            //确保文件描述符在跨进程通信中的正确性和安全性
+            //当你从 Parcel 或 Bundle 中读取文件描述符时，它会在第一次读取后自动关闭，因此第二次读取时会返回 null。
+            // 这是为了防止文件描述符被多个进程持有，从而导致资源泄漏或不安全的情况。
+            return mParcelFileDescriptor.dup();
         } catch (IOException e) {
             e.printStackTrace();
             return null;

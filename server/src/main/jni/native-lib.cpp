@@ -20,7 +20,7 @@ static const char *TAG = "123123jni";
 
 
 
-
+static pthread_mutex_t ashmem_lock = PTHREAD_MUTEX_INITIALIZER;
 
 extern "C" JNIEXPORT jint
 Java_com_jjj_server_AshmemWriter_createAshmem(JNIEnv *env, jobject thiz, jstring path, jint size) {
@@ -31,10 +31,18 @@ Java_com_jjj_server_AshmemWriter_createAshmem(JNIEnv *env, jobject thiz, jstring
     // 常量字符
     const char *parentPath = "/dev/ashmem";
 
+    pthread_mutex_lock(&ashmem_lock);
     // 打开Ashmem文件描述符
-    int shared_fd = open(parentPath, O_RDWR);
+    int shared_fd = TEMP_FAILURE_RETRY(open(parentPath, O_RDWR));
+    pthread_mutex_unlock(&ashmem_lock);
+
     if (shared_fd < 0) {
         LOGE("open:%d", shared_fd);
+        int error_code = errno;
+        // 使用错误代码来查找错误描述
+        const char *error_description = strerror(error_code);
+        // 打印错误描述（仅用于调试）
+        LOGE("错误代码：%d，错误描述：%s\n", error_code, error_description);
         return -1;
     }
 
@@ -60,7 +68,6 @@ Java_com_jjj_server_AshmemWriter_initAshmemByFd(JNIEnv *env, jobject thiz, jint 
 
     LOGE("sercer shared_memory_ptr:%ld", shared_memory_ptr);
     if (shared_memory_ptr == MAP_FAILED) {
-
         // 获取错误代码
         int error_code = errno;
         // 使用错误代码来查找错误描述
@@ -84,13 +91,14 @@ Java_com_jjj_server_AshmemWriter_writeAshmemData(JNIEnv *env, jobject thiz, jlon
                                                  jint length) {
 
     if (shared_memory_ptr <= 0) {
-        LOGE("write NULL");
+        __android_log_print(ANDROID_LOG_ERROR, "223223","write NULL shared_memory_ptr <= 0");
         return -1;
     }
 
     jbyte *data = env->GetByteArrayElements(buffer, NULL);
     if (data == NULL) {
         LOGE("write NULL");
+        __android_log_print(ANDROID_LOG_ERROR, "223223","write NULL data == NULL");
         return -1;
     }
 
